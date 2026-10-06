@@ -1,36 +1,21 @@
+// SPDX-FileCopyrightText: 2026 Neptuwunium
+//
+// SPDX-License-Identifier: MIT
+
+using System.Globalization;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-#if NET8_0_OR_GREATER
-using System.Numerics;
-#endif
 
 namespace LibreFios.Structures;
 
-#if NET8_0_OR_GREATER
 [StructLayout(LayoutKind.Sequential, Pack = 1), InlineArray(5)]
+// ReSharper disable once InconsistentNaming IdentifierTypo
 public struct PSARCUInt40 : IEquatable<PSARCUInt40>,
-                            IComparisonOperators<PSARCUInt40, PSARCUInt40, bool>,
-                            IComparisonOperators<PSARCUInt40, long, bool>,
-                            IComparisonOperators<PSARCUInt40, int, bool> {
+	IComparisonOperators<PSARCUInt40, PSARCUInt40, bool>,
+	IComparisonOperators<PSARCUInt40, long, bool>,
+	IComparisonOperators<PSARCUInt40, int, bool> {
 	private byte Value;
-#else
-[StructLayout(LayoutKind.Sequential, Pack = 1)]
-public struct PSARCUInt40 : IEquatable<PSARCUInt40> {
-	private unsafe fixed byte Value[0x5];
-
-	public static unsafe implicit operator ReadOnlySpan<byte>(PSARCUInt40 hash) => new(hash.Value, 0x5);
-	public static unsafe implicit operator Span<byte>(PSARCUInt40 hash) => new(hash.Value, 0x5);
-	public unsafe byte this[int index] {
-		get => index >= 0x5 ? throw new IndexOutOfRangeException() : Value[index];
-		set {
-			if (index > 0x5) {
-				throw new IndexOutOfRangeException();
-			}
-
-			Value[index] = value;
-		}
-	}
-#endif
 
 	[MethodImpl(MethodImplOptions.AggressiveOptimization)]
 	public static implicit operator PSARCUInt40(long value) {
@@ -54,7 +39,7 @@ public struct PSARCUInt40 : IEquatable<PSARCUInt40> {
 		return value;
 	}
 
-	public override string ToString() => ((long) this).ToString();
+	public override string ToString() => ((long) this).ToString(CultureInfo.InvariantCulture);
 	public bool Equals(PSARCUInt40 other) => this == other;
 	public override bool Equals(object? obj) => obj is PSARCUInt40 other && Equals(other);
 	public override int GetHashCode() => ((long) this).GetHashCode();

@@ -1,15 +1,22 @@
+// SPDX-FileCopyrightText: 2026 Neptuwunium
+//
+// SPDX-License-Identifier: MIT
+
+using System.Buffers;
 using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
+using LibreFios.Compression;
 using LibreFios.Structures;
 
 namespace LibreFios;
 
 public sealed class PSARCBuilder : IDisposable {
-	public PSARCBuilder(PSARC? archive) {
+	public PSARCBuilder(PSARC? archive, PSARCTarget target = PSARCTarget.Normal) {
 		Archive = archive;
+		Target = target;
 
 		if (Archive == null || Archive.FileEntries.Count == 0) {
 			return;
@@ -27,6 +34,7 @@ public sealed class PSARCBuilder : IDisposable {
 	}
 
 	private PSARC? Archive { get; }
+	public PSARCTarget Target { get; }
 	private List<PSARCTempFile> Files { get; } = [];
 
 	public void Dispose() {
@@ -78,7 +86,10 @@ public sealed class PSARCBuilder : IDisposable {
 			manifest.Append('\n');
 		}
 
-		var manifestBytes = Encoding.ASCII.GetBytes(manifest.ToString().TrimEnd('\n')).AsSpan();
+		var manifestText = manifest.ToString().TrimEnd('\n');
+		var n = Encoding.ASCII.GetByteCount(manifestText);
+		using var manifestBytes = new PSARCMemoryBuffer(n);
+		Encoding.ASCII.GetBytes(manifestText, manifestBytes.WritableSpan);
 
 		var largest = Files.Max(x => x.Buffer.Length);
 		if (manifestBytes.Length > largest) {
@@ -86,10 +97,10 @@ public sealed class PSARCBuilder : IDisposable {
 		}
 
 		var blockSize = largest switch {
-			                > 0x1000000 => 0x1000000,
-			                > 0x10000 => 0x10000,
-			                _ => 0x100,
-		                };
+			> 0x1000000 => 0x1000000,
+			> 0x10000 => 0x10000,
+			_ => 0x100,
+		};
 
 		using var compressedStream = new MemoryStream();
 		using var blockBuffer = new MemoryStream();
@@ -112,7 +123,7 @@ public sealed class PSARCBuilder : IDisposable {
 				BlockIndex = blockIndex,
 				DecompressedSize = file.Buffer.Length,
 			});
-			CompressFile(file.Buffer.Data, blockBuffer, compressedStream, compressionType, blockSize, ref blockIndex);
+			CompressFile(file.Buffer, blockBuffer, compressedStream, compressionType, blockSize, ref blockIndex);
 		}
 
 		var startOffset = (int) (Unsafe.SizeOf<PSARCHeader>() + fileRecords.Count * Unsafe.SizeOf<PSARCFileEntry>() + blockBuffer.Length);
@@ -121,7 +132,7 @@ public sealed class PSARCBuilder : IDisposable {
 		newHeader[0] = new PSARCHeader {
 			Magic = PSARCHeader.PSAR,
 			Version = version ?? PSARCVersion.Create(1, 4),
-			FAT = new PSARCFATHeader {
+			FileTable = new PSARCFileTableHeader {
 				Size = startOffset,
 				EntrySize = Unsafe.SizeOf<PSARCFileEntry>(),
 				Count = fileRecords.Count,
@@ -146,18 +157,23 @@ public sealed class PSARCBuilder : IDisposable {
 		compressedStream.CopyTo(output);
 	}
 
-	private static void CompressFile(ReadOnlySpan<byte> data, MemoryStream blockBuffer, MemoryStream compressedStream, PSARCCompressionType compressionType, int blockSize, ref int blockIndex) {
+	private static void CompressFile(PSARCMemoryBuffer data, MemoryStream blockBuffer, MemoryStream compressedStream, PSARCCompressionType compressionType, int blockSize, ref int blockIndex) {
 		var blockStride = (int) Math.Log(blockSize - 1, 0x100) + 1;
 
 		Span<int> lengthBuf = stackalloc int[1];
+		var tempBlock = ArrayPool<byte>.Shared.Rent(blockSize);
+		var tempBlockSpan = tempBlock.AsSpan();
 
+		var span = data.Span;
 		for (var i = 0; i < data.Length; i += blockSize) {
 			blockIndex++;
 
-			var slice = data[i..];
+			var slice = span[i..];
 			if (slice.Length > blockSize) {
 				slice = slice[..blockSize];
 			}
+
+			var sliceMem = data.Memory.Slice(i, slice.Length);
 
 			var start = compressedStream.Length;
 
@@ -174,8 +190,18 @@ public sealed class PSARCBuilder : IDisposable {
 					break;
 				}
 				case PSARCCompressionType.LZMA: throw new NotImplementedException("LZMA compression is not implemented");
-				case PSARCCompressionType.Oodle: throw new NotImplementedException("Oodle compression is not implemented");
-				case PSARCCompressionType.ZStandard: throw new NotImplementedException("ZStandard compression is not implemented");
+				case PSARCCompressionType.Oodle: {
+					tempBlockSpan.Clear();
+					var n = Oodle.Compress(sliceMem, tempBlock.AsMemory());
+					compressedStream.Write(tempBlockSpan[..n]);
+					break;
+				}
+				case PSARCCompressionType.ZStandard: {
+					using var zstd = new ZStandard();
+					var n = checked((int) zstd.Compress(sliceMem, tempBlock.AsMemory(), ZStandard.CompressionLevel.DecompressFast));
+					compressedStream.Write(tempBlockSpan[..n]);
+					break;
+				}
 				default: throw new ArgumentOutOfRangeException(nameof(compressionType), compressionType, null);
 			}
 

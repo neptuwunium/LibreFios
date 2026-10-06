@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Neptuwunium
+//
+// SPDX-License-Identifier: MIT
+
 using System.Buffers;
 using System.Buffers.Binary;
 using System.IO.Compression;
@@ -10,28 +14,17 @@ using LZMADecoder = SevenZip.Compression.LZMA.Decoder;
 
 namespace LibreFios;
 
-#if !NET8_0_OR_GREATER
-internal static class StreamPolyfillExtensions {
-	internal static void ReadExactly(this Stream stream, Span<byte> buffer) {
-		var minimumBytes = buffer.Length;
-		var totalRead = 0;
-		while (totalRead < minimumBytes) {
-			var read = stream.Read(buffer[totalRead..]);
-			if (read == 0) {
-				return;
-			}
-
-			totalRead += read;
-		}
-	}
+public enum PSARCTarget {
+	Normal,
+	PlayStationAllStarsBattleRoyale,
 }
-#endif
 
 public sealed class PSARC : IDisposable {
-	private static readonly char[] LineSeparators = ['\n', (char) 0];
+	private static readonly char[] LINE_SEPARATORS = ['\n', (char) 0];
 
-	public PSARC(Stream stream) {
+	public PSARC(Stream stream, PSARCTarget target = PSARCTarget.Normal) {
 		BaseStream = stream;
+		Target = target;
 
 		if (stream.Length < 0x20) {
 			FileEntries = [];
@@ -57,37 +50,39 @@ public sealed class PSARC : IDisposable {
 		}
 
 		// some sanity checks to ensure things are still valid
-		if (Header.FAT.EntrySize < 0x1e || Header.BlockSize < 0x100) {
+		if (Header.FileTable.EntrySize < 0x1e || Header.BlockSize < 0x100) {
 			throw new InvalidDataException("PSARC File is corrupt");
 		}
 
 		// read entries in one go
-		var entries = MemoryPool<PSARCFileEntry>.Shared.Rent(Header.FAT.Count);
-		var entriesSpan = entries.Memory.Span[..Header.FAT.Count];
+		var entries = MemoryPool<PSARCFileEntry>.Shared.Rent(Header.FileTable.Count);
+		var entriesSpan = entries.Memory.Span[..Header.FileTable.Count];
 		var entriesBytes = MemoryMarshal.AsBytes(entriesSpan);
 		BaseStream.ReadExactly(entriesBytes);
 
 		// amortize it into a dictionary.
-		FileEntries = new Dictionary<PSARCHash, PSARCFileEntry>(Header.FAT.Count);
+		FileEntries = new Dictionary<PSARCHash, PSARCFileEntry>(Header.FileTable.Count);
 		foreach (var entry in entriesSpan) {
 			FileEntries[entry.Hash] = entry;
 		}
 
 		// read the compression block list in one go
-		BlockSizeBufferSize = Header.FAT.Size - entriesBytes.Length;
+		BlockSizeBufferSize = Header.FileTable.Size - entriesBytes.Length;
 		BlockSizeBuffer = MemoryPool<byte>.Shared.Rent(BlockSizeBufferSize);
 		BaseStream.ReadExactly(BlockSizeBuffer.Memory.Span[..BlockSizeBufferSize]);
 
 		// read manifest (if it exists)
 		// manifest has no hash.
 		using var manifest = OpenFile(default(PSARCHash));
-		if (manifest.Length > 0 && manifest.Data[0] != 0) {
-			// todo: check if this always matches the file order, it might be possible to just skip md5-ing the path.
-			foreach (var filePath in Encoding.ASCII.GetString(manifest.Data).Split(LineSeparators, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)) {
-				// normalize paths.
-				// todo: can relative paths start with '/'?
-				Manifest[filePath.Replace('\\', '/')] = new PSARCHash(Header.ArchiveFlags.HasFlagFast(PSARCArchiveFlags.CaseInsensitivePaths) ? filePath.ToUpperInvariant() : filePath);
-			}
+		if (manifest.Length <= 0 || manifest.Span[0] == 0) {
+			return;
+		}
+
+		// todo: check if this always matches the file order, it might be possible to just skip md5-ing the path.
+		foreach (var filePath in Encoding.ASCII.GetString(manifest.Span).Split(LINE_SEPARATORS, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)) {
+			// normalize paths.
+			// todo: can relative paths start with '/'?
+			Manifest[filePath.Replace('\\', '/')] = new PSARCHash(Header.ArchiveFlags.HasFlagFast(PSARCArchiveFlags.CaseInsensitivePaths) ? filePath.ToUpperInvariant() : filePath);
 		}
 	}
 
@@ -98,6 +93,7 @@ public sealed class PSARC : IDisposable {
 	internal IMemoryOwner<byte> BlockSizeBuffer { get; set; }
 
 	public Stream BaseStream { get; set; }
+	public PSARCTarget Target { get; set; }
 	public Dictionary<PSARCHash, PSARCFileEntry> FileEntries { get; set; }
 	public Dictionary<string, PSARCHash> Manifest { get; set; }
 	public IEnumerable<string> Paths => Manifest.Keys;
@@ -123,8 +119,8 @@ public sealed class PSARC : IDisposable {
 		var blockBuffer = rentedBlockBuffer.Memory.Span[..Header.BlockSize];
 		var dataBuffer = rentedDataBuffer.Memory.Span[..Header.BlockSize];
 		var blockIndex = file.BlockIndex;
-		var resultBuffer = new PSARCMemoryBuffer(MemoryPool<byte>.Shared.Rent((int) file.DecompressedSize), (int) file.DecompressedSize);
-		var resultSpan = resultBuffer.WritableData;
+		var resultBuffer = new PSARCMemoryBuffer((int) file.DecompressedSize);
+		var resultSpan = resultBuffer.WritableSpan;
 
 		var fill = (int) file.DecompressedSize;
 		while (fill > 0) {
@@ -166,7 +162,8 @@ public sealed class PSARC : IDisposable {
 					break;
 				}
 				case PSARCCompressionType.ZLib: {
-					if (!IsZlib(blockSlice)) { // encrypted
+					if (!IsZlib(blockSlice)) {
+						// encrypted
 						return IPSARCBuffer.Empty;
 					}
 
@@ -187,8 +184,10 @@ public sealed class PSARC : IDisposable {
 
 					break;
 				}
-				case PSARCCompressionType.LZMA: { // note: find a better lzma implementation
-					if (!IsLZMA(blockSlice)) { // encrypted
+				case PSARCCompressionType.LZMA: {
+					// note: find a better lzma implementation
+					if (!IsLZMA(blockSlice)) {
+						// encrypted
 						return IPSARCBuffer.Empty;
 					}
 
@@ -206,7 +205,8 @@ public sealed class PSARC : IDisposable {
 						lzma.Code(unmanagedCompressed, unmanagedDecompressed, unmanagedCompressed.Length - 13, unmanagedDecompressed.Length, null);
 					}
 
-					if ((ulong) n > uncompressedSize) { // this should NEVER trigger.
+					if ((ulong) n > uncompressedSize) {
+						// this should NEVER trigger.
 						n = (int) uncompressedSize;
 					}
 
@@ -214,8 +214,10 @@ public sealed class PSARC : IDisposable {
 					fill -= n;
 					break;
 				}
-				case PSARCCompressionType.Oodle: { // note: provide oo2core.dll (rename it)
-					if (!IsOodle(blockSlice)) { // encrypted
+				case PSARCCompressionType.Oodle: {
+					// note: provide oo2core.dll (rename it)
+					if (!IsOodle(blockSlice)) {
+						// encrypted
 						return IPSARCBuffer.Empty;
 					}
 
@@ -224,13 +226,15 @@ public sealed class PSARC : IDisposable {
 					fill -= n;
 					break;
 				}
-				case PSARCCompressionType.ZStandard: { // note: provide libzstd.dll
-					if (!IsZStandard(blockSlice)) { // encrypted
+				case PSARCCompressionType.ZStandard: {
+					// note: provide libzstd.dll
+					if (!IsZStandard(blockSlice)) {
+						// encrypted
 						return IPSARCBuffer.Empty;
 					}
 
 					using var zstd = new ZStandard();
-					var n = (int) zstd.Decompress(rentedBlockBuffer.Memory[..Header.BlockSize], rentedDataBuffer.Memory[..Header.BlockSize]);
+					var n = zstd.Decompress(rentedBlockBuffer.Memory[..Header.BlockSize], rentedDataBuffer.Memory[..Header.BlockSize]);
 					dataBuffer[..n].CopyTo(resultSpan[(resultBuffer.Length - fill)..]);
 					fill -= n;
 					break;
@@ -256,12 +260,12 @@ public sealed class PSARC : IDisposable {
 		var offset = Header.CompressedBlockSize * index;
 		var bufferSpan = BlockSizeBuffer.Memory.Span;
 		return Header.CompressedBlockSize switch {
-			       0 => 0,
-			       1 => bufferSpan[offset],
-			       2 => (bufferSpan[offset++] << 8) | bufferSpan[offset],
-			       3 => (bufferSpan[offset++] << 16) | (bufferSpan[offset++] << 8) | bufferSpan[offset],
-			       4 => (bufferSpan[offset++] << 24) | (bufferSpan[offset++] << 16) | (bufferSpan[offset++] << 8) | bufferSpan[offset],
-			       _ => 0,
-		       };
+			0 => 0,
+			1 => bufferSpan[offset],
+			2 => (bufferSpan[offset++] << 8) | bufferSpan[offset],
+			3 => (bufferSpan[offset++] << 16) | (bufferSpan[offset++] << 8) | bufferSpan[offset],
+			4 => (bufferSpan[offset++] << 24) | (bufferSpan[offset++] << 16) | (bufferSpan[offset++] << 8) | bufferSpan[offset],
+			_ => 0,
+		};
 	}
 }

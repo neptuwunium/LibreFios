@@ -1,0 +1,10 @@
+<!--
+SPDX-FileCopyrightText: 2026 Neptuwunium
+
+SPDX-License-Identifier: MIT
+-->
+
+<Solution>
+	<Project Path="LibreFios.Unpack/LibreFios.Unpack.csproj"/>
+	<Project Path="LibreFios/LibreFios.csproj"/>
+</Solution>

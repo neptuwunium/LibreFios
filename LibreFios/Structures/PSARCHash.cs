@@ -1,35 +1,18 @@
+// SPDX-FileCopyrightText: 2026 Neptuwunium
+//
+// SPDX-License-Identifier: MIT
+
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
-#if NET8_0_OR_GREATER
-using System.Numerics;
-#endif
 
 namespace LibreFios.Structures;
 
-#if NET8_0_OR_GREATER
 [StructLayout(LayoutKind.Sequential, Pack = 1), InlineArray(0x10)]
 public struct PSARCHash() : IEquatable<PSARCHash>, IEqualityOperators<PSARCHash, PSARCHash, bool> {
 	private byte Value = default;
-#else
-[StructLayout(LayoutKind.Sequential, Pack = 1)]
-public struct PSARCHash : IEquatable<PSARCHash> {
-	private unsafe fixed byte Value[0x10];
-
-	public static unsafe implicit operator ReadOnlySpan<byte>(PSARCHash hash) => new(hash.Value, 0x10);
-	public static unsafe implicit operator Span<byte>(PSARCHash hash) => new(hash.Value, 0x10);
-	public unsafe byte this[int index] {
-		get => index >= 0x10 ? throw new IndexOutOfRangeException() : Value[index];
-		set {
-			if (index > 0x10) {
-				throw new IndexOutOfRangeException();
-			}
-
-			Value[index] = value;
-		}
-	}
-#endif
 
 	public PSARCHash(ReadOnlySpan<byte> data) : this() => MD5.HashData(data, this);
 

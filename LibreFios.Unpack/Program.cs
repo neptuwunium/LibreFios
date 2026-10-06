@@ -1,4 +1,9 @@
-﻿using System.CommandLine;
+﻿// SPDX-FileCopyrightText: 2026 Neptuwunium
+//
+// SPDX-License-Identifier: MIT
+
+using System.CommandLine;
+using System.Globalization;
 using Serilog;
 using Serilog.Events;
 
@@ -33,7 +38,7 @@ internal static class Program {
 				logLevel = LogEventLevel.Debug;
 			}
 
-			Log.Logger = new LoggerConfiguration().MinimumLevel.Is(logLevel).WriteTo.Console().CreateLogger();
+			Log.Logger = new LoggerConfiguration().MinimumLevel.Is(logLevel).WriteTo.Console(formatProvider: CultureInfo.InvariantCulture).CreateLogger();
 
 			var paths = context.ParseResult.GetValueForArgument(pathsArg);
 			var outputPath = context.ParseResult.GetValueForArgument(outputPathArg);
@@ -101,7 +106,7 @@ internal static class Program {
 						Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
 						using var outputStream = new FileStream(targetPath, FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
 						if (data.Length > 0) {
-							outputStream.Write(data.Data);
+							outputStream.Write(data.Span);
 						} else {
 							Log.Warning("PSARC File {Hash} ({Path}) is empty!", hash, path);
 						}

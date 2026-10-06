@@ -1,18 +1,16 @@
+// SPDX-FileCopyrightText: 2026 Neptuwunium
+//
+// SPDX-License-Identifier: MIT
+
 using System.Buffers.Binary;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-#if NET8_0_OR_GREATER
-using System.Numerics;
-#endif
 
 namespace LibreFios.Structures;
 
 [StructLayout(LayoutKind.Sequential, Pack = 1, Size = 4)]
-public record struct PSARCVersion(ushort MajorBE, ushort MinorBE)
-#if NET8_0_OR_GREATER
-	: IComparisonOperators<PSARCVersion, PSARCVersion, bool>
-#endif
-{
+public record struct PSARCVersion(ushort MajorBE, ushort MinorBE) : IComparisonOperators<PSARCVersion, PSARCVersion, bool> {
 	private ushort MajorBE { get; set; } = MajorBE;
 	private ushort MinorBE { get; set; } = MinorBE;
 

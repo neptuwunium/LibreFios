@@ -1,3 +1,9 @@
+<!--
+SPDX-FileCopyrightText: 2026 Neptuwunium
+
+SPDX-License-Identifier: MIT
+-->
+
 # LibreFios
 
 PSARC archive reader/writer.
@@ -33,3 +39,7 @@ builder.AddFile("NEW.BIN", newData);
 using var output = new FileStream("new.psarc", FileMode.Create, FileAccess.ReadWrite);
 builder.Build(output);
 ```
+
+### Attribution
+
+Special thanks to [PSAS-PSARC](https://github.com/Project-RePSASBR/psas-psarc/) for PSASBR Decryption.

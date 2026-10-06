@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Neptuwunium
+//
+// SPDX-License-Identifier: MIT
+
 namespace LibreFios.Structures;
 
 public enum PSARCCompressionType : uint {

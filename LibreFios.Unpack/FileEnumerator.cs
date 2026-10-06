@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Neptuwunium
+//
+// SPDX-License-Identifier: MIT
+
 using System.Collections;
 using System.IO.Enumeration;
 
@@ -9,8 +13,8 @@ internal class FileEnumerator : IEnumerable<string> {
 			throw new NotSupportedException();
 		}
 
-		Paths = [..paths];
-		Expressions = [..patterns];
+		Paths = [.. paths];
+		Expressions = [.. patterns];
 
 		Options = options;
 		IgnoreCase = options.MatchCasing == MatchCasing.CaseInsensitive || (options.MatchCasing == MatchCasing.PlatformDefault && SystemIsCaseInsensitive);

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Neptuwunium
+//
+// SPDX-License-Identifier: MIT
+
 using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 
@@ -10,7 +14,7 @@ public record struct PSARCHeader {
 	public uint Magic { get; set; }
 	public PSARCVersion Version { get; set; }
 	public PSARCCompressionType CompressionType { get; set; }
-	public PSARCFATHeader FAT { get; set; }
+	public PSARCFileTableHeader FileTable { get; set; }
 	private int BlockSizeBE { get; set; }
 	private uint ArchiveFlagsBE { get; set; }
 

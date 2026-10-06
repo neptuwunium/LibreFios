@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Neptuwunium
+//
+// SPDX-License-Identifier: MIT
+
 using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 
