@@ -9,6 +9,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using LibreFios.Compression;
+using LibreFios.Cryptography;
 using LibreFios.Structures;
 using LZMADecoder = SevenZip.Compression.LZMA.Decoder;
 
@@ -16,7 +17,7 @@ namespace LibreFios;
 
 public enum PSARCTarget {
 	Normal,
-	PlayStationAllStarsBattleRoyale,
+	PlaystationAllStarsBattleRoyale,
 }
 
 public sealed class PSARC : IDisposable {
@@ -112,15 +113,17 @@ public sealed class PSARC : IDisposable {
 		}
 
 		BaseStream.Position = file.Offset;
-
 		// rent some data from the memory pool for reading and decompressing.
 		using var rentedBlockBuffer = MemoryPool<byte>.Shared.Rent(Header.BlockSize);
 		using var rentedDataBuffer = MemoryPool<byte>.Shared.Rent(Header.BlockSize);
+		using var rentedEncBuffer = MemoryPool<byte>.Shared.Rent(Header.BlockSize);
 		var blockBuffer = rentedBlockBuffer.Memory.Span[..Header.BlockSize];
 		var dataBuffer = rentedDataBuffer.Memory.Span[..Header.BlockSize];
+		var encBuffer = rentedEncBuffer.Memory.Span[..Header.BlockSize];
 		var blockIndex = file.BlockIndex;
 		var resultBuffer = new PSARCMemoryBuffer((int) file.DecompressedSize);
 		var resultSpan = resultBuffer.WritableSpan;
+		var wasEncrypted = false;
 
 		var fill = (int) file.DecompressedSize;
 		while (fill > 0) {
@@ -153,6 +156,7 @@ public sealed class PSARC : IDisposable {
 				continue;
 			}
 
+			var compressedBlockBuffer = rentedBlockBuffer;
 			switch (Header.CompressionType) {
 				// this is not actually a valid compression type, but here for completeness
 				case PSARCCompressionType.Invalid:
@@ -163,8 +167,12 @@ public sealed class PSARC : IDisposable {
 				}
 				case PSARCCompressionType.ZLib: {
 					if (!IsZlib(blockSlice)) {
-						// encrypted
-						return IPSARCBuffer.Empty;
+						if (!TryDecrypt(blockSlice, encBuffer)) {
+							return IPSARCBuffer.Empty;
+						}
+
+						wasEncrypted = true;
+						compressedBlockBuffer = rentedEncBuffer;
 					}
 
 					// calculate how many bytes we'll be reading
@@ -172,10 +180,20 @@ public sealed class PSARC : IDisposable {
 
 					unsafe {
 						// wrap the compressed buffer span into a stream
-						using var unmanagedCompressedPin = rentedBlockBuffer.Memory.Pin();
+						using var unmanagedCompressedPin = compressedBlockBuffer.Memory.Pin();
 						using var unmanagedCompressed = new UnmanagedMemoryStream((byte*) unmanagedCompressedPin.Pointer, blockBuffer.Length);
-						using var compressionStream = new ZLibStream(unmanagedCompressed, CompressionMode.Decompress);
-						compressionStream.ReadExactly(dataBuffer[..n]);
+						Stream compressionStream;
+						if (wasEncrypted && Target == PSARCTarget.PlaystationAllStarsBattleRoyale) {
+							compressionStream = new DeflateStream(unmanagedCompressed, CompressionMode.Decompress);
+						} else {
+							compressionStream = new ZLibStream(unmanagedCompressed, CompressionMode.Decompress);
+						}
+
+						try {
+							compressionStream.ReadExactly(dataBuffer[..n]);
+						} finally {
+							compressionStream.Dispose();
+						}
 					}
 
 					// copy the decompressed data into the resulting buffer
@@ -187,8 +205,12 @@ public sealed class PSARC : IDisposable {
 				case PSARCCompressionType.LZMA: {
 					// note: find a better lzma implementation
 					if (!IsLZMA(blockSlice)) {
-						// encrypted
-						return IPSARCBuffer.Empty;
+						if (!TryDecrypt(blockSlice, encBuffer)) {
+							return IPSARCBuffer.Empty;
+						}
+
+						wasEncrypted = true;
+						compressedBlockBuffer = rentedEncBuffer;
 					}
 
 					var lzma = new LZMADecoder();
@@ -197,7 +219,7 @@ public sealed class PSARC : IDisposable {
 					lzma.SetDecoderProperties(ScratchPad[..5]);
 					var n = Math.Min(fill, Header.BlockSize);
 					unsafe {
-						using var unmanagedCompressedPin = rentedBlockBuffer.Memory.Pin();
+						using var unmanagedCompressedPin = compressedBlockBuffer.Memory.Pin();
 						using var unmanagedCompressed = new UnmanagedMemoryStream((byte*) unmanagedCompressedPin.Pointer, blockBuffer.Length);
 						using var unmanagedDecompressedPin = rentedDataBuffer.Memory.Pin();
 						using var unmanagedDecompressed = new UnmanagedMemoryStream((byte*) unmanagedDecompressedPin.Pointer, dataBuffer.Length);
@@ -217,11 +239,15 @@ public sealed class PSARC : IDisposable {
 				case PSARCCompressionType.Oodle: {
 					// note: provide oo2core.dll (rename it)
 					if (!IsOodle(blockSlice)) {
-						// encrypted
-						return IPSARCBuffer.Empty;
+						if (!TryDecrypt(blockSlice, encBuffer)) {
+							return IPSARCBuffer.Empty;
+						}
+
+						wasEncrypted = true;
+						compressedBlockBuffer = rentedEncBuffer;
 					}
 
-					var n = Oodle.Decompress(rentedBlockBuffer.Memory[..Header.BlockSize], rentedDataBuffer.Memory[..Header.BlockSize]);
+					var n = Oodle.Decompress(compressedBlockBuffer.Memory[..Header.BlockSize], rentedDataBuffer.Memory[..Header.BlockSize]);
 					dataBuffer[..n].CopyTo(resultSpan[(resultBuffer.Length - fill)..]);
 					fill -= n;
 					break;
@@ -229,12 +255,16 @@ public sealed class PSARC : IDisposable {
 				case PSARCCompressionType.ZStandard: {
 					// note: provide libzstd.dll
 					if (!IsZStandard(blockSlice)) {
-						// encrypted
-						return IPSARCBuffer.Empty;
+						if (!TryDecrypt(blockSlice, encBuffer)) {
+							return IPSARCBuffer.Empty;
+						}
+
+						wasEncrypted = true;
+						compressedBlockBuffer = rentedEncBuffer;
 					}
 
 					using var zstd = new ZStandard();
-					var n = zstd.Decompress(rentedBlockBuffer.Memory[..Header.BlockSize], rentedDataBuffer.Memory[..Header.BlockSize]);
+					var n = zstd.Decompress(compressedBlockBuffer.Memory[..Header.BlockSize], rentedDataBuffer.Memory[..Header.BlockSize]);
 					dataBuffer[..n].CopyTo(resultSpan[(resultBuffer.Length - fill)..]);
 					fill -= n;
 					break;
@@ -244,6 +274,21 @@ public sealed class PSARC : IDisposable {
 		}
 
 		return resultBuffer;
+	}
+
+	private bool TryDecrypt(Span<byte> encrypted, Span<byte> decrypted) {
+		switch (Target) {
+			case PSARCTarget.PlaystationAllStarsBattleRoyale: {
+				Span<byte> iv = stackalloc byte[16];
+				BinaryPrimitives.WriteUInt32BigEndian(iv, 0xdeadbeef);
+				BinaryPrimitives.WriteUInt32BigEndian(iv[4..], (uint) encrypted.Length);
+				BinaryPrimitives.WriteUInt32BigEndian(iv[8..], (uint) ((encrypted[0] << 8) | encrypted[1]));
+				AesCtr.Crypt(KeyVault.PLAYSTATION_ALL_STARS_BATTLE_ROYALE_KEY, iv, encrypted[2..], decrypted);
+				return true;
+			}
+			default:
+				return false;
+		}
 	}
 
 	private static bool IsZlib(Span<byte> span) => span[0] == 0x78 && span[1] > 0x1F;

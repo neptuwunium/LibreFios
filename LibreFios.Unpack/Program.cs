@@ -15,7 +15,7 @@ internal enum VerboseLevel {
 	Very,
 }
 
-internal record ProgramOptions(string[] Paths, string OutputPath, bool Dry, bool NoClobber, bool Recursive);
+internal record ProgramOptions(string[] Paths, string OutputPath, bool Dry, bool NoClobber, bool Recursive, PSARCTarget Target);
 
 internal static class Program {
 	private static void Main(string[] args) {
@@ -26,6 +26,7 @@ internal static class Program {
 		var recursiveOpt = root.AddOption<bool>("-r", "--recursive", "Traverse directories recursively when looking for PSARCs to open");
 		var noClobberOpt = root.AddOption<bool>("-n", "--no-clobber", "Silently skip existing files");
 		var dryOpt = root.AddOption<bool>("-d", "--dry", "Do not write anything");
+		var targetOpt = root.AddOption<PSARCTarget>("-t", "--target", "Game target for specific modifications");
 		var outputPathArg = root.AddArgument<string>("output-path", "Directory to write to");
 		outputPathArg.LegalFilePathsOnly();
 		var pathsArg = root.AddArgument<string[]>("input-paths", "Files to unpack or directories to iterate");
@@ -45,7 +46,8 @@ internal static class Program {
 			var recursive = context.ParseResult.GetValueForOption(recursiveOpt);
 			var noClobber = context.ParseResult.GetValueForOption(noClobberOpt);
 			var dry = context.ParseResult.GetValueForOption(dryOpt);
-			var options = new ProgramOptions(paths, outputPath, dry, noClobber, recursive);
+			var target = context.ParseResult.GetValueForOption(targetOpt);
+			var options = new ProgramOptions(paths, outputPath, dry, noClobber, recursive, target);
 			IterateCore(options);
 		});
 		root.Invoke(args);
@@ -75,7 +77,7 @@ internal static class Program {
 			Log.Verbose("Opening PSARC {Path}", file);
 			using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
 			try {
-				using var psarc = new PSARC(stream);
+				using var psarc = new PSARC(stream, options.Target);
 
 				var reversePaths = psarc.BuildReversePaths();
 				foreach (var (hash, entry) in psarc.FileEntries) {
