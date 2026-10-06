@@ -7,21 +7,12 @@ using System.Buffers;
 namespace LibreFios;
 
 public interface IPSARCBuffer : IDisposable {
-	public static NullBuffer Empty { get; } = new();
+	public static PSARCMemoryBuffer Empty { get; } = new(0);
 
 	public int Length { get; set; }
 	public ReadOnlySpan<byte> Span { get; }
 	public ReadOnlyMemory<byte> Memory { get; }
 	public byte this[int offset] { get; }
-}
-
-public sealed class NullBuffer : IPSARCBuffer {
-	public int Length { get => field * 0; set; }
-	public ReadOnlySpan<byte> Span => ReadOnlySpan<byte>.Empty;
-	public ReadOnlyMemory<byte> Memory => ReadOnlyMemory<byte>.Empty;
-	public byte this[int offset] => 0;
-
-	public void Dispose() { }
 }
 
 public sealed class PSARCMemoryBuffer : IPSARCBuffer {
@@ -31,6 +22,12 @@ public sealed class PSARCMemoryBuffer : IPSARCBuffer {
 	}
 
 	public PSARCMemoryBuffer(int size) {
+		if (size <= 0) {
+			Buffer = [];
+			Length = 0;
+			return;
+		}
+
 		Buffer = ArrayPool<byte>.Shared.Rent(size);
 		Length = size;
 	}
@@ -46,17 +43,22 @@ public sealed class PSARCMemoryBuffer : IPSARCBuffer {
 
 	public void Dispose() => ArrayPool<byte>.Shared.Return(Buffer);
 
-	private int MaybeResize(int value) {
-		if (value <= Buffer.Length) {
-			return value;
+	private int MaybeResize(int length) {
+		if (length <= Buffer.Length) {
+			return length;
 		}
 
-		var newBuffer = ArrayPool<byte>.Shared.Rent(value);
-		Buffer.CopyTo(newBuffer, 0);
-		var oldBuffer = Buffer;
-		Buffer = newBuffer;
-		ArrayPool<byte>.Shared.Return(oldBuffer);
+		var tmpBuffer = ArrayPool<byte>.Shared.Rent(length);
+		if (Buffer.Length > 0) {
+			Buffer.CopyTo(tmpBuffer, 0);
+		}
 
-		return value;
+		(Buffer, tmpBuffer) = (tmpBuffer, Buffer);
+
+		if (tmpBuffer.Length > 0) {
+			ArrayPool<byte>.Shared.Return(tmpBuffer);
+		}
+
+		return length;
 	}
 }
